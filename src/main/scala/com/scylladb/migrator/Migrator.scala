@@ -1,6 +1,5 @@
 package com.scylladb.migrator
 
-import com.datastax.driver.core.ProtocolOptions
 import com.datastax.spark.connector._
 import com.datastax.spark.connector.cql._
 import com.datastax.spark.connector.rdd.partitioner.dht.LongToken
@@ -212,7 +211,8 @@ object Migrator {
       log.info(finalSchema.treeString)
 
       df.flatMap { row =>
-        regularKeyOrdinals.value
+        if (regularKeyOrdinals.value.isEmpty) List(row)
+        else regularKeyOrdinals.value
           .flatMap {
             case (fieldName, (ordinal, ttlOrdinal, writetimeOrdinal))
                 if !row.isNullAt(writetimeOrdinal) =>
@@ -227,8 +227,14 @@ object Migrator {
             case _ =>
               None
           }
-          .groupBy(tp => (tp._3, tp._4))
-          .mapValues(_.map(tp => tp._1 -> tp._2).toMap)
+          .groupBy {
+            case (fieldName, value, ttl, writetime) => (ttl, writetime)
+          }
+          .mapValues(
+            _.map {
+              case (fieldName, value, _, _) => fieldName -> value
+            }.toMap
+          )
           .map {
             case ((ttl, writetime), fields) =>
               val newValues = broadcastSchema.value.fields.map { field =>
